@@ -18,9 +18,10 @@ name: ci
 concurrency:
     group: ${{ github.workflow }}-${{ github.head_ref || github.run_id  }}
     cancel-in-progress: true
-
+  
 on:
     push:
+    workflow_dispatch:
     pull_request:
         branches:
             - main
@@ -32,136 +33,46 @@ permissions:
     contents: read
 
 jobs:
-  linux:
-    env:
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
-    runs-on: ${{ matrix.os }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
-    strategy:
-      matrix:
-        compiler: [{cc: gcc, cxx: g++}]
-        config: [debug, release]
-        os: [ubuntu-24.04]
-        include:
-          # Test Ubuntu-22.04 release build works.
-          - os: ubuntu-22.04
-            compiler: {cc: gcc, cxx: g++}
-            config: release
-          # Test clang support
-          - os: ubuntu-24.04
-            compiler: {cc: clang, cxx: clang++}
-            config: release
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.10'
-      - uses: lukka/get-cmake@latest
-        with:
-          cmakeVersion: 3.22.1
-      - name: Install python deps
-        run: python -m pip install jsonschema pyparsing
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-            key: ${{ matrix.os }}-${{ matrix.config }}-${{ matrix.compiler.cc }}-${{ matrix.compiler.cxx }}
-      - name: Install packages
-        run: sudo apt-get -qq update && sudo apt-get install -y libwayland-dev xorg-dev
-      - name: Build Vulkan-ExtensionLayer
-        run: python scripts/github_ci_build_desktop.py --config ${{ matrix.config }}
-        env:
-          CC: ${{ matrix.compiler.cc }}
-          CXX: ${{ matrix.compiler.cxx }}
-
-  windows:
-    runs-on: windows-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
-    strategy:
-      matrix:
-        arch: [ amd64, amd64_x86 ]
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.10'
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: ${{ matrix.arch }}
-      - name: Install build dependencies
-        run: python -m pip install jsonschema pyparsing
-      - name: Build Vulkan-ExtensionLayer
-        run: python scripts/github_ci_build_desktop.py --config release
-
-  macos:
-    runs-on: macos-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
-    steps:
-      - uses: actions/checkout@v6
-      - uses: lukka/get-cmake@latest
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-      - run: cmake -S. -B build -D CMAKE_BUILD_TYPE=Debug -D BUILD_TESTS=ON -D BUILD_WERROR=ON -D UPDATE_DEPS=ON
-        env:
-          CMAKE_C_COMPILER_LAUNCHER: ccache
-          CMAKE_CXX_COMPILER_LAUNCHER: ccache
-      - run: cmake --build build
-      - run: cmake --install build --prefix /tmp
-
-  iOS:
-    runs-on: macos-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
-    steps:
-      - uses: actions/checkout@v6
-      - uses: lukka/get-cmake@latest
-      - name: Configure for iOS
-        run: |
-          cmake -S . -B build/ \
-          -D CMAKE_SYSTEM_NAME=iOS \
-          -D CMAKE_OSX_ARCHITECTURES=arm64 \
-          -D BUILD_WERROR=ON \
-          -D UPDATE_DEPS=ON \
-          -D CMAKE_BUILD_TYPE=Debug
-        env:
-          LDFLAGS: -Wl,-fatal_warnings
-      - run: cmake --build build
-      - run: cmake --install build --prefix /tmp
-
   android:
     env:
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
-    runs-on: ubuntu-22.04
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         abi: [ arm64-v8a ]
-        build_tests: [ "ON" ]
-        stl_type: ["c++_shared"]
-        include:
-        - abi: armeabi-v7a
-          build_tests: "OFF"
-          stl_type: c++_static
+        build_tests: [ "OFF" ]
+        stl_type: ["c++_static"]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@main
       - uses: lukka/get-cmake@latest
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@main
         with:
           key: android-${{ matrix.abi }}-${{ matrix.build_tests }}-${{ matrix.stl_type }}
       - name: Configure
         run: |
-          cmake -S . -B build/ --toolchain $ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+          cmake -S . -B build/ --toolchain $ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
           -D ANDROID_PLATFORM=26 \
           -D CMAKE_ANDROID_ARCH_ABI=${{ matrix.abi }} \
           -D CMAKE_ANDROID_STL_TYPE=${{ matrix.stl_type }} \
           -D ANDROID_USE_LEGACY_TOOLCHAIN_FILE=NO \
-          -D CMAKE_BUILD_TYPE=Debug \
+          -D CMAKE_BUILD_TYPE=Release \
           -D BUILD_TESTS=${{ matrix.build_tests }} \
           -D UPDATE_DEPS=ON \
-          -D BUILD_WERROR=ON
+          -D BUILD_WERROR=OFF
       - name: Build
         run: cmake --build build/
       - name: Install
-        run: cmake --install build --prefix build/install
+        run: |
+             cmake --install build --prefix build/install
+             $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip build/install/**/*.so
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@main
+        with:
+    # Artifact name
+          name: artifact# optional, default is artifact
+    # A file, directory or wildcard pattern that describes what to upload
+          path: build/install/**/*.so
+    # The desired behavior if no files are found using the provided path.
